@@ -1,5 +1,11 @@
 import { useState, useEffect } from "react";
-import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
+import {
+  MapContainer,
+  TileLayer,
+  Marker,
+  Popup,
+  Polyline,
+} from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 import markerIcon2x from "leaflet/dist/images/marker-icon-2x.png";
@@ -18,16 +24,24 @@ L.Icon.Default.mergeOptions({
 function App() {
   const [issPosition, setIssPosition] = useState({ latitude: 0, longitude: 0 });
   const [loading, setLoading] = useState(true);
+  const [groundTrack, setGroundTrack] = useState([]);
 
   useEffect(() => {
     const fetchISSPosition = async () => {
       try {
         const response = await fetch("http://api.open-notify.org/iss-now.json");
         const data = await response.json();
+        const latitude = parseFloat(data.iss_position.latitude);
+        const longitude = parseFloat(data.iss_position.longitude);
+
         setIssPosition({
-          latitude: parseFloat(data.iss_position.latitude),
-          longitude: parseFloat(data.iss_position.longitude),
+          latitude,
+          longitude,
         });
+
+        // Fetch the ground track
+        fetchGroundTrack();
+
         setLoading(false);
       } catch (error) {
         console.error("Error fetching ISS position:", error);
@@ -35,8 +49,50 @@ function App() {
       }
     };
 
+    const fetchGroundTrack = async () => {
+      try {
+        // Generate timestamps for the next 90 minutes (one orbit)
+        // We'll request positions at 2-minute intervals
+        const now = Math.floor(Date.now() / 1000); // Current time in seconds
+        const timestamps = [];
+
+        // Create 45 timestamps at 2-minute intervals (90 minutes total)
+        for (let i = 0; i < 45; i++) {
+          timestamps.push(now + i * 120); // 120 seconds = 2 minutes
+        }
+
+        // The API allows up to 10 timestamps per request, so we need to make multiple requests
+        const trackPoints = [];
+
+        // Process timestamps in chunks of 10
+        for (let i = 0; i < timestamps.length; i += 10) {
+          const chunk = timestamps.slice(i, i + 10);
+          const timestampParam = chunk.join(",");
+
+          const response = await fetch(
+            `https://api.wheretheiss.at/v1/satellites/25544/positions?timestamps=${timestampParam}`
+          );
+
+          if (!response.ok) {
+            throw new Error(
+              `API request failed with status ${response.status}`
+            );
+          }
+
+          const positions = await response.json();
+          trackPoints.push(...positions);
+        }
+
+        // Convert the positions to the format needed for the Polyline
+        const track = trackPoints.map((pos) => [pos.latitude, pos.longitude]);
+        setGroundTrack(track);
+      } catch (error) {
+        console.error("Error fetching ISS ground track:", error);
+      }
+    };
+
     fetchISSPosition();
-    const interval = setInterval(fetchISSPosition, 5000);
+    const interval = setInterval(fetchISSPosition, 30000); // Update every 30 seconds
 
     return () => clearInterval(interval);
   }, []);
@@ -58,6 +114,9 @@ function App() {
                 <p>
                   <span>Longitude:</span> {issPosition.longitude.toFixed(4)}°
                 </p>
+                <p>
+                  <span>Ground Track:</span> Next 90 minutes
+                </p>
               </div>
             </div>
           </div>
@@ -74,6 +133,15 @@ function App() {
               <Marker position={[issPosition.latitude, issPosition.longitude]}>
                 <Popup>International Space Station</Popup>
               </Marker>
+              {groundTrack.length > 0 && (
+                <Polyline
+                  positions={groundTrack}
+                  color="#00FFFF"
+                  weight={2}
+                  opacity={0.7}
+                  dashArray="5, 5"
+                />
+              )}
             </MapContainer>
           </div>
         </div>
